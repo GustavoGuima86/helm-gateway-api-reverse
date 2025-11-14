@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway-api-reverse
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: example-gateway
+  namespace: gateway-api-reverse
+spec:
+  # Use the AWS VPC Lattice GatewayClass
+  gatewayClassName: aws-vpc-lattice
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: route-a
+  namespace: gateway-api-reverse
+spec:
+  parentRefs:
+    - name: example-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /a
+      backendRefs:
+        - name: service-a
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: route-b
+  namespace: gateway-api-reverse
+spec:
+  parentRefs:
+    - name: example-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /b
+      backendRefs:
+        - name: service-b
+          port: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-a
+  namespace: gateway-api-reverse
+spec:
+  selector:
+    app: service-a
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-a
+  namespace: gateway-api-reverse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-a
+  template:
+    metadata:
+      labels:
+        app: service-a
+    spec:
+      containers:
+        - name: app
+          image: hashicorp/http-echo
+          args:
+            - "-text=Hello from Service A"
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-b
+  namespace: gateway-api-reverse
+spec:
+  selector:
+    app: service-b
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-b
+  namespace: gateway-api-reverse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-b
+  template:
+    metadata:
+      labels:
+        app: service-b
+    spec:
+      containers:
+        - name: app
+          image: hashicorp/http-echo
+          args:
+            - "-text=Hello from Service B"
+          ports:
+            - containerPort: 8080

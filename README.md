@@ -1,72 +1,149 @@
-# EKS Gateway Proxy Helm Chart
 
-This Helm chart deploys the [AWS Gateway API Controller](https://docs.aws.amazon.com/vpc-lattice/latest/ug/gateway-api-controller.html) to an Amazon EKS cluster. The controller manages AWS VPC Lattice services and network resources based on the Kubernetes Gateway API.
+# Gateway API Reverse Proxy on EKS (with AWS VPC Lattice)
 
-This chart is configured to be suitable for EKS clusters running in Fargate mode.
+This guide provides a complete, step-by-step workflow to set up Gateway API as a reverse proxy in an EKS cluster using AWS VPC Lattice, Terraform, and Helm. It includes IAM, security group, controller, and test service setup.
 
-## How it Works
-
-The chart provisions the following Kubernetes resources:
-
-*   **`ServiceAccount`**: A dedicated service account for the AWS Gateway API Controller pod. It is annotated to use AWS IAM Roles for Service Accounts (IRSA) for authenticating with the AWS API.
-*   **`Deployment`**: Runs the AWS Gateway API Controller. The controller pod is configured with the necessary arguments to communicate with the AWS API, including the AWS region and EKS cluster name.
-*   **`GatewayClass`**: A cluster-scoped resource that defines a class of Gateways that can be provisioned. This chart creates a `GatewayClass` named `aws-vpc-lattice`.
-*   **`Gateway`**: A namespaced resource that requests a traffic routing entrypoint. This chart creates a `Gateway` that listens for HTTP traffic on port 80.
-*   **`HTTPRoute`**: A namespaced resource that defines rules for routing HTTP traffic from a `Gateway` to backend services. This chart provides a sample route for `api.example.com` to a backend service.
+---
 
 ## Prerequisites
+- AWS CLI
+- kubectl
+- helm
+- eksctl
+- jq
+- An existing EKS cluster
 
-*   Kubernetes 1.25+
-*   Helm 3.2.0+
-*   An active Amazon EKS cluster.
-*   An IAM OIDC provider configured for the EKS cluster to allow for IAM Roles for Service Accounts (IRSA).
-*   An IAM Role for the AWS Gateway API Controller with the required permissions. The trust policy for the role must allow the `ServiceAccount` created by this chart to assume it.
+---
 
-## Installation
+## 1. Set Environment Variables
 
-1.  **Navigate to the chart directory:**
-    ```sh
-    cd eks-gateway-proxy
-    ```
+```
+export AWS_REGION=<eks_cluster_region>
+export EKS_CLUSTER_NAME=<EKS_CLUSTER_NAME>
+```
 
-2.  **Package the Chart:**
-    This command packages the chart into a versioned archive file.
-    ```sh
-    helm package .
-    ```
+---
 
-3.  **Install the Chart:**
-    To install the chart with the release name `my-gateway`, run the following command. You must override key values with your environment-specific details.
+## 2. Install Gateway API CRDs
 
-    *   `serviceAccount.annotations."eks\.amazonaws\.com/role-arn"`: The ARN of the IAM role you created for the controller.
-    *   `aws.region`: The AWS region your EKS cluster is in.
-    *   `aws.clusterName`: The name of your EKS cluster.
+```
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
+```
 
-    ```sh
-    helm install my-gateway ./eks-gateway-proxy-0.1.0.tgz \
-      --namespace gateway-system \
-      --create-namespace \
-      --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/YOUR_IRSA_ROLE_NAME" \
-      --set aws.region="YOUR_AWS_REGION" \
-      --set aws.clusterName="YOUR_EKS_CLUSTER_NAME"
-    ```
+---
 
-## Configuration
+## 4. Set Up IAM Permissions and Security Groups (Terraform)
 
-The following table lists the most important configurable parameters of the `eks-gateway-proxy` chart and their default values.
+The Terraform in `infra/aws-vpc-lattice-controller` will automatically fetch your OIDC provider and node security group from the cluster name, and configure all required IAM and security group rules.
 
-| Parameter                                    | Description                                                                                             | Default                                                              | 
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | 
-| `replicaCount`                               | Number of replicas for the controller deployment.                                                       | `1`                                                                  | 
-| `image.repository`                           | The container image repository for the AWS Gateway API Controller.                                      | `public.ecr.aws/aws-application-networking-k8s/aws-gateway-api-controller` | 
-| `image.tag`                                  | The container image tag.                                                                                | `"v1.0.4"`                                                           | 
-| `aws.region`                                 | The AWS region where the EKS cluster is running.                                                        | `"us-west-2"`                                                        | 
-| `aws.clusterName`                            | The name of your EKS cluster.                                                                           | `"my-eks-cluster"`                                                   | 
-| `serviceAccount.create`                      | Whether to create a service account.                                                                    | `true`                                                               | 
-| `serviceAccount.annotations`                 | Annotations for the service account. **Must be overridden** with your IRSA role ARN.                    | `{ "eks.amazonaws.com/role-arn": "..." }`                            | 
-| `gateway.name`                               | Name of the Gateway resource.                                                                           | `"my-fargate-gateway"`                                               | 
-| `gateway.listener.port`                      | The port on which the Gateway listens.                                                                  | `80`                                                                 | 
-| `httpRoute.hostname`                         | The hostname to match for the HTTPRoute.                                                                | `"api.example.com"`                                                  | 
-| `httpRoute.backend.service.name`             | The name of the backend service to route traffic to.                                                    | `"my-application-service"`                                           | 
-| `httpRoute.backend.service.namespace`        | The namespace of the backend service.                                                                   | `"default"`                                                          | 
-| `httpRoute.backend.service.port`             | The port of the backend service.                                                                        | `8080`                                                               |
+```
+cd infra/aws-vpc-lattice-controller
+terraform init
+terraform apply -var="cluster_name=$EKS_CLUSTER_NAME" -var="region=$AWS_REGION"
+```
+
+Outputs:
+- `irsa_role_arn`: Use for IRSA
+- `podid_role_arn`: Use for Pod Identity
+
+---
+
+## 5. Create Namespace
+
+```
+kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/deploy-namesystem.yaml
+```
+
+---
+
+
+## 6. Create Service Account
+
+Apply the provided manifest:
+
+```
+kubectl apply -f infra/aws-vpc-lattice-controller/gateway-api-controller-service-account.yaml
+```
+
+---
+
+## 7. Set Up Pod Identity (Recommended)
+
+```
+aws eks create-addon --cluster-name guto-cluster --addon-name eks-pod-identity-agent --addon-version v1.0.0-eksbuild.1 --region eu-central-1
+kubectl get pods -n kube-system | grep 'eks-pod-identity-agent'
+
+# Create association
+aws eks create-pod-identity-association --cluster-name guto-cluster --role-arn arn:aws:iam::156041418374:role/VPCLatticeControllerIAMRole-PodId --namespace aws-application-networking-system --service-account gateway-api-controller --region eu-central-1
+```
+
+---
+
+
+## 9. Install the AWS Gateway API Controller
+
+### Helm (if available)
+```
+aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
+helm install gateway-api-controller \
+	oci://public.ecr.aws/aws-application-networking-k8s/aws-gateway-controller-chart \
+	--version=v1.1.7 \
+	--set=serviceAccount.create=false \
+	--namespace aws-application-networking-system \
+	--set=log.level=info
+```
+
+### Kubectl (manifest)
+```
+kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/deploy-v1.1.7.yaml
+```
+
+---
+
+## 10. Create the GatewayClass
+
+```
+kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/gatewayclass.yaml
+```
+
+---
+
+## 11. Deploy Gateway and Routes (Helm)
+
+Use the provided Helm chart in `helm/gateway-api-reverse`:
+
+```
+cd helm
+helm install gateway-api-reverse ./gateway-api-reverse
+```
+
+---
+
+## 12. Test with Two Services
+
+The Helm chart deploys two services (`service-a` and `service-b`) and configures HTTPRoutes to route traffic based on the path (`/a` and `/b`).
+
+To test routing, get the VPC Lattice service endpoint URL from the AWS Console or using AWS CLI. Then, curl the endpoints:
+
+```
+# Find the VPC Lattice service URL (see AWS Console > VPC Lattice > Services)
+curl https://<lattice-service-endpoint>/a
+curl https://<lattice-service-endpoint>/b
+```
+
+---
+
+## 13. Clean Up
+
+```
+helm uninstall gateway-api-reverse
+kubectl delete namespace aws-application-networking-system
+kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
+```
+
+---
+
+## References
+
+- [AWS VPC Lattice Controller Documentation](https://docs.aws.amazon.com/eks/latest/userguide/aws-vpc-lattice-controller.html)
+- [Gateway API Documentation](https://gateway-api.sigs.k8s.io/)

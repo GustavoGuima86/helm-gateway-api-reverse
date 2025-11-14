@@ -1,0 +1,4 @@
+apiVersion: v2
+name: gateway-api-reverse
+description: Gateway API reverse proxy example with two test services
+version: 0.1.0
