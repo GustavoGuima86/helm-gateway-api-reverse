@@ -1,0 +1,80 @@
+# Default values for eks-gateway-proxy.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: public.ecr.aws/aws-application-networking-k8s/aws-gateway-api-controller
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart's appVersion.
+  tag: "v1.0.4"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# AWS specific settings for the controller
+aws:
+  region: "us-west-2"
+  clusterName: "my-eks-cluster"
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations:
+    # Placeholder for EKS Pod Identity / IRSA
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/aws-gateway-api-controller-role
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - "ALL"
+  seccompProfile:
+    type: "RuntimeDefault"
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+gatewayClass:
+  name: aws-vpc-lattice
+  controllerName: application-networking.aws/gateway-api-controller
+
+gateway:
+  name: my-fargate-gateway
+  listener:
+    port: 80
+    protocol: HTTP
+
+httpRoute:
+  name: my-app-route
+  hostname: "api.example.com"
+  backend:
+    service:
+      name: "my-application-service"
+      namespace: "default"
+      port: 8080

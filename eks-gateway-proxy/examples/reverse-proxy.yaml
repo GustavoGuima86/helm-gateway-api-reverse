@@ -1,0 +1,177 @@
+# --- Service A ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-a-html
+  namespace: default
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <title>Service A</title>
+    <style>
+      body {
+        width: 35em;
+        margin: 0 auto;
+        font-family: Tahoma, Verdana, Arial, sans-serif;
+        background-color: #e8f5e9; /* Light Green */
+        color: #2e7d32; /* Dark Green */
+        text-align: center;
+        padding-top: 50px;
+      }
+    </style>
+    </head>
+    <body>
+    <h1>This is Service A</h1>
+    <p>Your request was routed here by the Gateway API.</p>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-a
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-a
+  template:
+    metadata:
+      labels:
+        app: service-a
+    spec:
+      containers:
+      - name: service-a
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: html-volume
+          mountPath: /usr/share/nginx/html/index.html
+          subPath: index.html
+      volumes:
+      - name: html-volume
+        configMap:
+          name: service-a-html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-a
+  namespace: default
+spec:
+  selector:
+    app: service-a
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+
+# --- Service B ---
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-b-html
+  namespace: default
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <title>Service B</title>
+    <style>
+      body {
+        width: 35em;
+        margin: 0 auto;
+        font-family: Tahoma, Verdana, Arial, sans-serif;
+        background-color: #e3f2fd; /* Light Blue */
+        color: #1565c0; /* Dark Blue */
+        text-align: center;
+        padding-top: 50px;
+      }
+    </style>
+    </head>
+    <body>
+    <h1>This is Service B</h1>
+    <p>Your request was routed here by the Gateway API.</p>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-b
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-b
+  template:
+    metadata:
+      labels:
+        app: service-b
+    spec:
+      containers:
+      - name: service-b
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: html-volume
+          mountPath: /usr/share/nginx/html/index.html
+          subPath: index.html
+      volumes:
+      - name: html-volume
+        configMap:
+          name: service-b-html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-b
+  namespace: default
+spec:
+  selector:
+    app: service-b
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+
+# --- HTTPRoute for Reverse Proxy ---
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: reverse-proxy-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: my-fargate-gateway
+      # IMPORTANT: This namespace must match the namespace where you installed the Helm chart.
+      # The installation instructions in the main README use 'gateway-system'.
+      namespace: gateway-system
+  hostnames:
+  - "api.example.com"
+  rules:
+    - matches:
+      - path:
+          type: PathPrefix
+          value: /service-a
+      backendRefs:
+      - name: service-a
+        port: 80
+        namespace: default
+    - matches:
+      - path:
+          type: PathPrefix
+          value: /service-b
+      backendRefs:
+      - name: service-b
+        port: 80
+        namespace: default
