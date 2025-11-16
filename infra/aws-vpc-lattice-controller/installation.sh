@@ -1,59 +1,52 @@
 #!/bin/bash
 
-echo "kube config update"
+ECHO "Updating kube config"
 aws eks --region eu-central-1 update-kubeconfig --name guto-cluster
+ECHO "Kube config updated"
 
-echo "Installing CRD"
+ECHO "Installing CRD"
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
+ECHO "CRD installed"
 
-echo "Creating namespace aws-application-networking-system"
+ECHO "Creating namespace aws-application-networking-system"
 curl -o aws-application-networking-system.yaml https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/deploy-namesystem.yaml
 kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/deploy-namesystem.yaml
+ECHO "Namespace created"
 
+ECHO "applying gateway-api-controller service account"
+kubectl apply -f gateway-api-controller-service-account.yaml
+ECHO "service account applied"
 
-# echo "creating eks addon eks-pod-identity-agent"
-# aws eks create-addon --cluster-name guto-cluster --addon-name eks-pod-identity-agent --addon-version v1.0.0-eksbuild.1
-
-# Create association
+ECHO "creating pod identity association"
 aws eks create-pod-identity-association \
     --cluster-name guto-cluster \
     --role-arn arn:aws:iam::156041418374:role/VPCLatticeControllerIAMRole-PodId \
     --namespace aws-application-networking-system \
     --service-account gateway-api-controller \
     --region eu-central-1 \
+ECHO "pod identity association created"
 
-echo "applying gateway-api-controller service account"
-kubectl apply -f gateway-api-controller-service-account.yaml
-
-echo "logging in to ECR"
+ECHO "logging in to ECR"
 aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
+ECHO "logged in to ECR"
 
-# echo "creating Service account gateway-api-controller"
-# eksctl create iamserviceaccount \
-#     --cluster=guto-cluster \
-#     --namespace=aws-application-networking-system \
-#     --name=gateway-api-controller \
-#     --attach-policy-arn=arn:aws:iam::156041418374:policy/VPCLatticeControllerIAMPolicy \
-#     --override-existing-serviceaccounts \
-#     --region eu-central-1 \
-#     --approve
-
-
-
-echo "installing gateway-api-controller"
+ECHO "installing gateway-api-controller"
 helm install gateway-api-controller \
     oci://public.ecr.aws/aws-application-networking-k8s/aws-gateway-controller-chart \
     --version=v1.1.7 \
     --set=serviceAccount.create=false \
     --namespace aws-application-networking-system \
     --set=log.level=info
+ECHO "gateway-api-controller installed"
 
-
-echo "installing aws-application-networking-controller"
+ECHO "installing aws-application-networking-controller"
 kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/deploy-v1.1.7.yaml
+ECHO "aws-application-networking-controller installed"
 
-echo "installing gateway-classr"
+ECHO "installing gateway-classr"
 kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/gatewayclass.yaml
+ECHO "gateway-classr installed"
 
-echo "installing gateway-api-reverse"
+ECHO "installing gateway-api-reverse"
 helm install gateway-api-reverse ../../helm/gateway-api-reverse
+ECHO "gateway-api-reverse installed"
