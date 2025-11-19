@@ -1,149 +1,75 @@
+# Helm Gateway API Reverse Proxy Example
 
-# Gateway API Reverse Proxy on EKS (with AWS VPC Lattice)
+This project demonstrates how to set up a reverse proxy using Kubernetes Gateway API and Istio, routing traffic to two backend services (`service-a` and `service-b`). It's designed to be deployed on an AWS EKS cluster with the AWS Load Balancer Controller already installed.
 
-This guide provides a complete, step-by-step workflow to set up Gateway API as a reverse proxy in an EKS cluster using AWS VPC Lattice, Terraform, and Helm. It includes IAM, security group, controller, and test service setup.
+## Project Structure
 
----
+*   `1-backend-services.yaml`: Defines the `demo-app` namespace, and two NGINX-based backend services (`service-a` and `service-b`) along with their Kubernetes Deployments and Services.
+*   `2-gateway-routing.yaml`: Configures the Kubernetes Gateway API resources. This includes a `Gateway` resource that provisions an AWS Network Load Balancer (NLB) via annotations, and an `HTTPRoute` that defines routing rules to direct traffic to `service-a` and `service-b` based on URL paths (`/service-a` and `/service-b`).
+*   `install.sh`: A bash script to deploy the entire setup, including Gateway API CRDs, Istio (base and Istiod), backend services, and gateway routing rules. It also waits for the Gateway URL and NLB provisioning, and then tests the routes.
+*   `uninstall.sh`: A bash script to tear down all the resources created by `install.sh`.
 
 ## Prerequisites
-- AWS CLI
-- kubectl
-- helm
-- eksctl
-- jq
-- An existing EKS cluster
 
----
+Before deploying this project, ensure you have the following:
 
-## 1. Set Environment Variables
+1.  **AWS EKS Cluster:** An existing Amazon EKS cluster.
+2.  **`kubectl`:** Configured to connect to your EKS cluster. The `install.sh` script will update your kubeconfig for a specific cluster (`guto-cluster` in `eu-central-1`).
+3.  **`helm`:** The Kubernetes package manager.
+4.  **AWS Load Balancer Controller:** This controller must be installed and running in your EKS cluster. The `Gateway` resource uses annotations that rely on this controller to provision the NLB.
+5.  **`aws-cli`:** Configured with appropriate credentials to interact with your AWS account.
+6.  **`dig`:** A DNS lookup utility (usually part of `dnsutils` or `bind-utils` packages) for verifying NLB provisioning.
+7.  **`curl`:** For testing the deployed services.
 
-```
-export AWS_REGION=<eks_cluster_region>
-export EKS_CLUSTER_NAME=<EKS_CLUSTER_NAME>
-```
+## Deployment
 
----
+To deploy the project, execute the `install.sh` script:
 
-## 2. Install Gateway API CRDs
-
-```
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
+```bash
+./install.sh
 ```
 
----
+This script will perform the following actions:
 
-## 4. Set Up IAM Permissions and Security Groups (Terraform)
+1.  Update your `kubeconfig` to connect to the specified EKS cluster.
+2.  Install the Gateway API Custom Resource Definitions (CRDs).
+3.  Add the Istio Helm repository and install Istio base and Istiod.
+4.  Verify the presence of the AWS Load Balancer Controller.
+5.  Apply the backend service deployments and services.
+6.  Apply the Gateway API `Gateway` and `HTTPRoute` resources.
+7.  Wait for the AWS NLB to be provisioned and its URL to be available.
+8.  Test the `/service-a` and `/service-b` routes using `curl`.
 
-The Terraform in `infra/aws-vpc-lattice-controller` will automatically fetch your OIDC provider and node security group from the cluster name, and configure all required IAM and security group rules.
+## Testing
 
-```
-cd infra/aws-vpc-lattice-controller
-terraform init
-terraform apply -var="cluster_name=$EKS_CLUSTER_NAME" -var="region=$AWS_REGION"
-```
+After successful deployment, the `install.sh` script will automatically test the routes and print the `curl` output. You can manually test the services by getting the Gateway URL and then accessing the paths:
 
-Outputs:
-- `irsa_role_arn`: Use for IRSA
-- `podid_role_arn`: Use for Pod Identity
+1.  Get the Gateway URL:
+    ```bash
+    kubectl get gateway public-gateway -n demo-app -o jsonpath='{.status.addresses[0].value}'
+    ```
+2.  Access `service-a`:
+    ```bash
+    curl http://<YOUR_GATEWAY_URL>/service-a
+    ```
+3.  Access `service-b`:
+    ```bash
+    curl http://<YOUR_GATEWAY_URL>/service-b
+    ```
 
----
+You should see "Hello from service-a" and "Hello from service-b" respectively.
 
-## 5. Create Namespace
+## Cleanup
 
-```
-kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/deploy-namesystem.yaml
-```
+To remove all the deployed resources, execute the `uninstall.sh` script:
 
----
-
-
-## 6. Create Service Account
-
-Apply the provided manifest:
-
-```
-kubectl apply -f infra/aws-vpc-lattice-controller/gateway-api-controller-service-account.yaml
-```
-
----
-
-## 7. Set Up Pod Identity (Recommended)
-
-```
-aws eks create-addon --cluster-name guto-cluster --addon-name eks-pod-identity-agent --addon-version v1.0.0-eksbuild.1 --region eu-central-1
-kubectl get pods -n kube-system | grep 'eks-pod-identity-agent'
-
-# Create association
-aws eks create-pod-identity-association --cluster-name guto-cluster --role-arn arn:aws:iam::156041418374:role/VPCLatticeControllerIAMRole-PodId --namespace aws-application-networking-system --service-account gateway-api-controller --region eu-central-1
+```bash
+./uninstall.sh
 ```
 
----
+This script will delete:
 
-
-## 9. Install the AWS Gateway API Controller
-
-### Helm (if available)
-```
-aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
-helm install gateway-api-controller \
-	oci://public.ecr.aws/aws-application-networking-k8s/aws-gateway-controller-chart \
-	--version=v1.1.7 \
-	--set=serviceAccount.create=false \
-	--namespace aws-application-networking-system \
-	--set=log.level=info
-```
-
-### Kubectl (manifest)
-```
-kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/deploy-v1.1.7.yaml
-```
-
----
-
-## 10. Create the GatewayClass
-
-```
-kubectl apply -f https://raw.githubusercontent.com/aws/aws-application-networking-k8s/main/files/controller-installation/gatewayclass.yaml
-```
-
----
-
-## 11. Deploy Gateway and Routes (Helm)
-
-Use the provided Helm chart in `helm/gateway-api-reverse`:
-
-```
-cd helm
-helm install gateway-api-reverse ./gateway-api-reverse
-```
-
----
-
-## 12. Test with Two Services
-
-The Helm chart deploys two services (`service-a` and `service-b`) and configures HTTPRoutes to route traffic based on the path (`/a` and `/b`).
-
-To test routing, get the VPC Lattice service endpoint URL from the AWS Console or using AWS CLI. Then, curl the endpoints:
-
-```
-# Find the VPC Lattice service URL (see AWS Console > VPC Lattice > Services)
-curl https://<lattice-service-endpoint>/a
-curl https://<lattice-service-endpoint>/b
-```
-
----
-
-## 13. Clean Up
-
-```
-helm uninstall gateway-api-reverse
-kubectl delete namespace aws-application-networking-system
-kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
-```
-
----
-
-## References
-
-- [AWS VPC Lattice Controller Documentation](https://docs.aws.amazon.com/eks/latest/userguide/aws-vpc-lattice-controller.html)
-- [Gateway API Documentation](https://gateway-api.sigs.k8s.io/)
+*   Gateway API CRDs
+*   Istio components (istiod, istio-base)
+*   Backend services (deployments, services, and the `demo-app` namespace)
+*   Gateway API `Gateway` and `HTTPRoute` resources.
